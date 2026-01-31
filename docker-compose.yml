@@ -110,75 +110,74 @@ services:
       retries: 3
       start_period: 40s
 
- # ============================================
-# Celery Worker - Tareas Asíncronas
-# ============================================
-celery:
-  build:
-    context: ./ecotachostec-backend3
-    dockerfile: docker/Dockerfile
-  container_name: ecotachostec-celery
-  command: python -m celery -A ecotachostec_backend worker -l info --concurrency=4
-  environment:
-    - DJANGO_DEBUG=False
-    - DB_ENGINE=django.db.backends.postgresql
-    - DB_NAME=ecotachostec
-    - DB_USER=postgres
-    - DB_PASSWORD=postgres
-    - DB_HOST=db
-    - DB_PORT=5432
-    - SECRET_KEY=your-secret-key-change-in-production
-    - PYTHONUNBUFFERED=1
-    - CELERY_BROKER_URL=redis://redis:6379/0
-    - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    - REDIS_URL=redis://redis:6379/1
-    - MQTT_BROKER=mosquitto
-    - MQTT_PORT=1883
-  volumes:
-    - ./ecotachostec-backend3/src:/app
-    - media_volume:/app/media
-  depends_on:
-    db:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
-    mosquitto:
-      condition: service_started
-  networks:
-    - ecotachos-network
+  # ============================================
+  # Celery Worker - Tareas Asíncronas
+  # ============================================
+  celery:
+    build:
+      context: ./ecotachostec-backend3
+      dockerfile: docker/Dockerfile
+    container_name: ecotachostec-celery
+    command: python -m celery -A ecotachostec_backend worker -l info --concurrency=4
+    environment:
+      - DJANGO_DEBUG=False
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=ecotachostec
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=db
+      - DB_PORT=5432
+      - SECRET_KEY=your-secret-key-change-in-production
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+    volumes:
+      - ./ecotachostec-backend3/src:/app
+      - media_volume:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - ecotachos-network
 
-# ============================================
-# Celery Beat - Scheduler de Tareas
-# ============================================
-celery-beat:
-  build:
-    context: ./ecotachostec-backend3
-    dockerfile: docker/Dockerfile
-  container_name: ecotachostec-celery-beat
-  command: python -m celery -A ecotachostec_backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-  environment:
-    - DJANGO_DEBUG=False
-    - DB_ENGINE=django.db.backends.postgresql
-    - DB_NAME=ecotachostec
-    - DB_USER=postgres
-    - DB_PASSWORD=postgres
-    - DB_HOST=db
-    - DB_PORT=5432
-    - SECRET_KEY=your-secret-key-change-in-production
-    - PYTHONUNBUFFERED=1
-    - CELERY_BROKER_URL=redis://redis:6379/0
-    - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    - REDIS_URL=redis://redis:6379/1
-  volumes:
-    - ./ecotachostec-backend3/src:/app
-  depends_on:
-    db:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
-  networks:
-    - ecotachos-network
-
+  # ============================================
+  # Celery Beat - Scheduler de Tareas
+  # ============================================
+  celery-beat:
+    build:
+      context: ./ecotachostec-backend3
+      dockerfile: docker/Dockerfile
+    container_name: ecotachostec-celery-beat
+    command: python -m celery -A ecotachostec_backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      - DJANGO_DEBUG=False
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=ecotachostec
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=db
+      - DB_PORT=5432
+      - SECRET_KEY=your-secret-key-change-in-production
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+    volumes:
+      - ./ecotachostec-backend3/src:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ecotachos-network
 
   # ============================================
   # Frontend - React + Nginx
@@ -211,3 +210,4 @@ volumes:
 networks:
   ecotachos-network:
     driver: bridge
+    
