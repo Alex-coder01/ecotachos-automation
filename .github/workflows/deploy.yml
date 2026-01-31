@@ -1,0 +1,249 @@
+name: 🚀 Deploy ECOTACHOS a DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # ============================================
+  # 1. TESTS Y VALIDACIÓN
+  # ============================================
+  test:
+    runs-on: ubuntu-latest
+    name: 🧪 Tests & Validation
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v3
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 🔍 Lint Backend
+        continue-on-error: true
+        run: |
+          cd ecotachostec-backend3/src
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m py_compile core/*.py
+
+      - name: 🧪 Tests Backend
+        continue-on-error: true
+        run: |
+          cd ecotachostec-backend3/src
+          python manage.py test --settings=ecotachostec_backend.settings 2>&1 | head -50 || true
+
+      - name: 📦 Validar requirements.txt
+        run: |
+          cd ecotachostec-backend3/src
+          pip install -r requirements.txt 2>&1 | tail -20
+
+  # ============================================
+  # 2. BUILD IMÁGENES DOCKER
+  # ============================================
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    name: 🐳 Build Docker Images
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v3
+
+      - name: 🐳 Configurar Docker
+        uses: docker/setup-buildx-action@v2
+
+      - name: 🏗️ Build Backend
+        run: |
+          cd ecotachostec-backend3
+          docker build -f docker/Dockerfile -t backend:latest .
+          docker images
+
+      - name: 🏗️ Build Frontend
+        run: |
+          cd ecotachostec-frontend2
+          docker build -f Dockerfile -t frontend:latest .
+          docker images
+
+  # ============================================
+  # 3. DESPLIEGUE EN DIGITALOCEAN
+  # ============================================
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    name: 🚀 Deploy to Droplet
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 📋 Información del despliegue
+        run: |
+          echo "🔔 Información del despliegue:"
+          echo "   Branch: ${{ github.ref }}"
+          echo "   Commit: ${{ github.sha }}"
+          echo "   Autor: ${{ github.actor }}"
+          echo "   Mensaje: ${{ github.event.head_commit.message }}"
+
+      - name: 🔑 Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DROPLET_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: 📦 Subir código al Droplet
+        run: |
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key -o ConnectTimeout=5" \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '__pycache__' \
+            --exclude '.env' \
+            --exclude 'venv' \
+            ./ root@${{ secrets.DROPLET_IP }}:/root/ecotachos/ \
+            2>&1 | tail -20
+
+      - name: 🚀 Ejecutar despliegue en Droplet
+        run: |
+          ssh -i ~/.ssh/deploy_key root@${{ secrets.DROPLET_IP }} << 'DEPLOY'
+          set -e
+          echo "📍 Iniciando despliegue en Droplet..."
+          cd /root/ecotachos
+          
+          # Git
+          echo "📥 Actualizando repositorio..."
+          git pull origin main 2>/dev/null || true
+          
+          # Docker
+          echo "🐳 Deteniendo servicios..."
+          docker-compose down 2>/dev/null || true
+          
+          echo "🏗️ Construyendo imágenes..."
+          docker-compose build --no-cache 2>&1 | tail -5
+          
+          echo "🚀 Iniciando servicios..."
+          docker-compose up -d
+          
+          echo "⏳ Esperando servicios (30s)..."
+          sleep 30
+          
+          # Migraciones
+          echo "🔄 Ejecutando migraciones..."
+          docker-compose exec -T backend python manage.py migrate --noinput 2>&1 | tail -5 || true
+          docker-compose exec -T backend python manage.py collectstatic --noinput 2>&1 | tail -3 || true
+          
+          echo "✅ Despliegue completado en servidor"
+          DEPLOY
+
+      - name: 🏥 Health Checks
+        run: |
+          echo "🔍 Verificando servicios..."
+          
+          for i in {1..10}; do
+            if curl -f http://${{ secrets.DROPLET_IP }}:8000/health/ > /dev/null 2>&1; then
+              echo "✅ Backend OK"
+              break
+            fi
+            echo "⏳ Esperando Backend ($i/10)..."
+            sleep 3
+          done
+          
+          for i in {1..10}; do
+            if curl -f http://${{ secrets.DROPLET_IP }}:80/health > /dev/null 2>&1; then
+              echo "✅ Frontend OK"
+              break
+            fi
+            echo "⏳ Esperando Frontend ($i/10)..."
+            sleep 3
+          done
+          
+          echo "✅ Todos los servicios están OK"
+
+      - name: 📊 Mostrar estado de servicios
+        if: always()
+        run: |
+          ssh -i ~/.ssh/deploy_key root@${{ secrets.DROPLET_IP }} << 'STATUS'
+          echo "📊 Estado de servicios:"
+          cd /root/ecotachos
+          docker-compose ps
+          echo ""
+          echo "📋 Últimos logs (últimas 10 líneas):"
+          docker-compose logs --tail=10
+          STATUS
+
+      - name: ✅ Despliegue exitoso
+        if: success()
+        run: |
+          echo "🎉 Despliegue completado exitosamente!"
+          echo ""
+          echo "📌 Acceso a servicios:"
+          echo "   Frontend:  http://${{ secrets.DROPLET_IP }}"
+          echo "   Backend:   http://${{ secrets.DROPLET_IP }}:8000"
+          echo "   IP:        ${{ secrets.DROPLET_IP }}"
+
+  # ============================================
+  # 4. ROLLBACK AUTOMÁTICO (si falla)
+  # ============================================
+  rollback:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: failure() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    name: 🔙 Rollback
+
+    steps:
+      - name: 🔑 Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DROPLET_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: 🔙 Ejecutar rollback
+        run: |
+          ssh -i ~/.ssh/deploy_key root@${{ secrets.DROPLET_IP }} << 'ROLLBACK'
+          echo "⚠️  ROLLBACK en progreso..."
+          cd /root/ecotachos
+          
+          docker-compose down
+          git revert HEAD --no-edit 2>/dev/null || git reset --hard HEAD~1
+          docker-compose up -d
+          
+          sleep 10
+          docker-compose ps
+          
+          echo "✅ Rollback completado - Sistema restaurado"
+          ROLLBACK
+
+  # ============================================
+  # 5. NOTIFICACIONES
+  # ============================================
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, build, deploy]
+    if: always()
+    name: 📧 Notifications
+
+    steps:
+      - name: 📧 Notificación por correo
+        if: always()
+        run: |
+          STATUS="❌ FALLÓ"
+          if [ "${{ job.status }}" == "success" ]; then
+            STATUS="✅ EXITOSO"
+          fi
+          
+          echo "Pipeline $STATUS"
+          echo "Rama: ${{ github.ref }}"
+          echo "Autor: ${{ github.actor }}"

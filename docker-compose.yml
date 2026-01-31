@@ -1,0 +1,212 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Base de Datos - PostgreSQL
+  # ============================================
+  db:
+    image: postgres:15-alpine
+    container_name: ecotachostec-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ecotachostec
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - ecotachos-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Redis - Caché y Cola de Tareas
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: ecotachostec-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ecotachos-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # MQTT Broker - IoT/Sensores
+  # ============================================
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: ecotachostec-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_logs:/mosquitto/log
+    networks:
+      - ecotachos-network
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$SYS/broker/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ============================================
+  # Backend - Django
+  # ============================================
+  backend:
+    build:
+      context: ./ecotachostec-backend3
+      dockerfile: docker/Dockerfile
+    container_name: ecotachostec-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_DEBUG=False
+      - DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,0.0.0.0
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=ecotachostec
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=db
+      - DB_PORT=5432
+      - SECRET_KEY=your-secret-key-change-in-production
+      - GUNICORN_WORKERS=4
+      - GUNICORN_THREADS=2
+      - GUNICORN_TIMEOUT=120
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+      - MQTT_USERNAME=
+      - MQTT_PASSWORD=
+    volumes:
+      - ./ecotachostec-backend3/src:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - ecotachos-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # Celery Worker - Tareas Asíncronas
+  # ============================================
+  celery:
+    build:
+      context: ./ecotachostec-backend3
+      dockerfile: docker/Dockerfile
+    container_name: ecotachostec-celery
+    command: celery -A ecotachostec_backend worker -l info --concurrency=4
+    environment:
+      - DJANGO_DEBUG=False
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=ecotachostec
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=db
+      - DB_PORT=5432
+      - SECRET_KEY=your-secret-key-change-in-production
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+    volumes:
+      - ./ecotachostec-backend3/src:/app
+      - media_volume:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - ecotachos-network
+
+  # ============================================
+  # Celery Beat - Scheduler de Tareas
+  # ============================================
+  celery-beat:
+    build:
+      context: ./ecotachostec-backend3
+      dockerfile: docker/Dockerfile
+    container_name: ecotachostec-celery-beat
+    command: celery -A ecotachostec_backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      - DJANGO_DEBUG=False
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=ecotachostec
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=db
+      - DB_PORT=5432
+      - SECRET_KEY=your-secret-key-change-in-production
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+    volumes:
+      - ./ecotachostec-backend3/src:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ecotachos-network
+
+  # ============================================
+  # Frontend - React + Nginx
+  # ============================================
+  frontend:
+    build:
+      context: ./ecotachostec-frontend2
+      dockerfile: Dockerfile
+    container_name: ecotachostec-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - ecotachos-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:
+  mosquitto_data:
+  mosquitto_logs:
+
+networks:
+  ecotachos-network:
+    driver: bridge

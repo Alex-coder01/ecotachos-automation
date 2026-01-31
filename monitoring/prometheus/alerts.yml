@@ -1,0 +1,82 @@
+groups:
+  - name: ecotachos-alerts
+    interval: 30s
+    rules:
+      # ============================================
+      # Alertas de Disponibilidad
+      # ============================================
+      - alert: BackendDown
+        expr: up{job="django-backend"} == 0
+        for: 2m
+        annotations:
+          summary: "❌ Backend está offline"
+          description: "El backend Django no responde por más de 2 minutos"
+
+      - alert: FrontendDown
+        expr: up{job="frontend"} == 0
+        for: 2m
+        annotations:
+          summary: "❌ Frontend está offline"
+          description: "El frontend Nginx no responde por más de 2 minutos"
+
+      - alert: DatabaseDown
+        expr: up{job="postgres"} == 0
+        for: 2m
+        annotations:
+          summary: "❌ Base de datos offline"
+          description: "PostgreSQL no responde por más de 2 minutos"
+
+      # ============================================
+      # Alertas de Recursos
+      # ============================================
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        annotations:
+          summary: "⚠️  Uso de memoria alto"
+          description: "El Droplet está usando más del 85% de memoria"
+
+      - alert: HighCPUUsage
+        expr: (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100 > 80
+        for: 5m
+        annotations:
+          summary: "⚠️  CPU muy alta"
+          description: "El Droplet está usando más del 80% de CPU"
+
+      - alert: DiskSpaceRunningOut
+        expr: (1 - (node_filesystem_avail_bytes{fstype="ext4"} / node_filesystem_size_bytes{fstype="ext4"})) * 100 > 85
+        for: 5m
+        annotations:
+          summary: "⚠️  Disco casi lleno"
+          description: "El disco está más del 85% lleno"
+
+      # ============================================
+      # Alertas de Aplicación
+      # ============================================
+      - alert: HighErrorRate
+        expr: rate(django_http_requests_total_exc_raised_total[5m]) > 0.05
+        for: 5m
+        annotations:
+          summary: "⚠️  Tasa de errores alta"
+          description: "La aplicación está generando más de 5% de errores"
+
+      - alert: SlowResponse
+        expr: histogram_quantile(0.95, django_http_requests_latency_seconds_bucket) > 1
+        for: 5m
+        annotations:
+          summary: "🐢 Respuestas lentas"
+          description: "El p95 de latencia es mayor a 1 segundo"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 2m
+        annotations:
+          summary: "❌ Redis offline"
+          description: "Redis no responde por más de 2 minutos"
+
+      - alert: HighDatabaseConnections
+        expr: sum(pg_stat_activity_count) > 80
+        for: 5m
+        annotations:
+          summary: "⚠️  Muchas conexiones a BD"
+          description: "Hay más de 80 conexiones activas a PostgreSQL"
